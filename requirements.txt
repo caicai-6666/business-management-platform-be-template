@@ -1,0 +1,3 @@
+# 派生 HTTP 服务的基础依赖；SQLite 验收只用 Python 标准库
+fastapi==0.115.12
+uvicorn==0.34.2
