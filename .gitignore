@@ -1,28 +1,36 @@
-# 默认忽略，仅放行模板源码、规范、依赖和验收工具。
+# 默认忽略，仅放行派生项目需要的文件。
 *
 !/.gitignore
 !/AGENTS.md
 !/README.md
+!/Dockerfile
+!/.dockerignore
 !/main.py
 !/requirements.txt
-!/requirements/
-!/requirements/*.txt
 
+# 应用源码和正式文档。
 !/app/
 !/app/**/
 !/app/**/*.py
 !/description/
 !/description/**/
 !/description/**/*.md
-!/tools/
-!/tools/*.py
 
-# 保留目录结构，运行数据、测试样本及实验结果留在本地。
+# 运行时静态资源按实际文件单独放行，当前模板仅保留目录。
+!/assets/
+!/assets/.gitkeep
+
+# 仅保留目录占位及公开验收命令依赖的脚本。
 !/data/
 !/data/.gitkeep
 !/tests/
+!/tests/check_search.py
+!/tests/check_middleware.py
+!/tests/test_check_middleware.py
+!/tests/test_sqlite.py
 !/tests/fixtures/
 !/tests/fixtures/.gitkeep
+!/tests/fixtures/mysql_search.py
 !/tests/tmp/
 !/tests/tmp/.gitkeep
 !/experiment/
@@ -40,3 +48,5 @@ __pycache__/
 *.tmp
 *.swp
 *~
+!/tests/test_middleware_platform.py
+!/tests/test_dingtalk.py

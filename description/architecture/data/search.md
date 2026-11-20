@@ -1,30 +1,40 @@
-# 存储与检索验收
+# SQLite 全文与向量检索
 
-单机、低写入并发可选 SQLite。派生服务在 DATA_DIR 下打开 SQLITE_FILENAME，连接启用外键并设置锁等待时间；使用 WAL 时对活动数据库用 SQLite backup API 做一致性备份。多实例并发写入可选 MySQL 8.4/InnoDB，统一 utf8mb4、UTC、事务边界及迁移版本。切换 DB_ENGINE 仅选择驱动，迁移历史数据需单独导出、导入并核对主键、行数及索引命中。
+模板开发镜像内置 SQLite FTS5 和 sqlite-vec 0.1.9。从部署目录执行 `docker compose run --build --rm check` 即可验收。两项检查使用临时文件，通过正式连接写入并重开查询，完成后清理样本。
 
-| 模式 | 索引和查询 | 验收结果 |
+| 能力 | 派生项目入口 | 验收预期 |
 | --- | --- | --- |
-| SQLite FTS5 | 样例对中文预先按词加空格；标题和正文建列，MATCH 参数绑定，bm25 标题权重 8，分数升序 | 查询“验收”，标题命中的 1 先于正文命中的 2，排除 3 |
-| MySQL FULLTEXT | InnoDB 上使用 ngram 解析器，默认双字切分，提交写入后 MATCH AGAINST 自然语言查询，相关度降序 | 连续中文样本中查询“验收”，两次命中的 1 先于一次命中的 2，排除 3 |
-| 可选 sqlite-vec | 独立 vec0 表，二维固定向量，L2 距离升序取前二 | 查询 [1,0] 返回 1、3，距离约为 0 和 0.1414 |
+| 中文 BM25 | 主库 transaction() / reader()，FTS5 标题和正文列 | 查询“验收”命中“设备验收”。标题权重为 8、正文为 1 时，标题命中的记录 1 先于正文命中的记录 2 |
+| SQL 向量检索 | initialize(vector=True)、transaction(vector=True)、reader(vector=True) | 固定查询向量 [1,0] 的前两个 L2 近邻为记录 1、3，距离约为 0 和 0.1414 |
 
-本目录可直接运行：
+## 中文索引与查询
 
-```sh
-python3 tools/check_search.py
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements/vector.txt
-.venv/bin/python tools/check_search.py --vector
+派生项目在自己的迁移中定义 FTS5 虚拟表。原始标题和正文保存在权威业务记录中。写入 FTS5 前用 `app.repository.full_text.index_text` 对中文逐字切分，对连续字母数字统一大小写。用相同规则生成字面短语，支持从连续中文匹配“验收”等短词。下面以派生迁移创建的 docs(title, body) 为例：
+
+```python
+from app.repository.full_text import index_text, match_phrase
+from app.repository.sqlite import reader, transaction
+
+with transaction() as db:
+    db.execute("INSERT INTO docs(rowid, title, body) VALUES (?, ?, ?)",
+               (1, index_text("设备验收"), index_text("合同付款")))
+with reader() as db:
+    rows = db.execute("SELECT rowid FROM docs WHERE docs MATCH ? ORDER BY bm25(docs, 8, 1), rowid",
+                      (match_phrase("验收"),)).fetchall()
 ```
 
-向量路径需要 Python 的 sqlite3 支持运行时加载扩展。仅加载安装包内的扩展，随后立即关闭加载权限。已验证 Python 3.12/Linux ARM64、sqlite-vec 0.1.9；宿主 Python 缺少 enable_load_extension 时可用[容器命令](../../../../README.md)。MySQL 验收用上级目录的 `./tools/check-mysql.sh`。这三个检查使用人工样本，独立于业务服务或嵌入模型。
+## 向量索引
 
-## 派生平台的索引契约
+需要索引时调用 `initialize(vector=True)` 创建独立的空向量库，默认位置为 DATA_DIR/vectors.sqlite3。每个向量库连接都会加载镜像内固定版本的扩展，随即关闭加载权限。派生项目在此库创建维度与实际嵌入模型一致的 vec0 表，并记录模型版本。下面以已有二维向量表 vectors(v) 为例：
 
-SQLite 默认分词器对连续中文的处理与预分词样例有差异。导入与查询应使用同一分词规则并以真实领域词验收。MySQL 的 ngram_token_size、停用词与字符集同样影响短词查询，修改后重建索引。两引擎的相关度数值分别解释。
+```python
+from app.repository.sqlite import reader
 
-VECTOR_ENABLED 默认关闭。启用时由派生服务在 DATA_DIR/VECTOR_INDEX_FILENAME 建立可重建的 SQLite 派生库。MySQL 主库也可采用此设计，向量文件随后端数据卷保存。本模板只实测向量查询原语；跨库同步、混合排序、模型调用及权限联查均由派生平台实现。记录资源 ID、实例版本、租户、嵌入模型版本和维度。主库提交时同事务记录待索引任务，单写者按版本幂等更新，失败可重放，定期核对漏项；多副本部署需明确索引复制和写入归属。文本和向量召回后都要回查主库当前版本、删除状态和读取权限，再生成可见摘要。删除后即时阻止读取，确认索引清理后完成删除任务。
+with reader(vector=True) as db:
+    nearest = db.execute(
+        "SELECT rowid, distance FROM vectors WHERE v MATCH ? AND k=? ORDER BY distance",
+        ("[1,0]", 2),
+    ).fetchall()
+```
 
-索引失效时可关闭向量，继续使用全文查询；重建完成后再启用。真实数据卷按主库同等级限制访问。备份包含主库与归属文件，派生索引可从权威数据重建。
-
-派生服务创建虚拟环境后，以 `python -m pip install -r requirements.txt` 安装 HTTP 基础依赖；MySQL 模式追加 `python -m pip install -r requirements/mysql.txt`。检索工具可独立运行，SQLite 基础路径无需安装上述两组依赖。
+主库保存权威记录及版本。派生项目需要异步更新索引时，在主库提交时记录待处理任务，按版本幂等更新或清理索引。向用户展示结果前，按已验证身份回查主库的可见范围、当前版本和删除状态。索引可从权威数据重建。备份与恢复见[主库指南](sqlite.md)。

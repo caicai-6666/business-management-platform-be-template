@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!requirements.txt
+!app/
+!app/**/
+!app/**/*.py
+!tests/
+!tests/check_search.py
+!tests/check_middleware.py
+!main.py
